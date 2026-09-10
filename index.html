@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>HS Breach Checker (fully offline)</title>
+<style>
+:root {
+  --bg: #111111;
+  --card: #1a1a1a;
+  --ink: #e6e6e6;
+  --muted: #999999;
+  --line: #333333;
+  --accent: #4ec9b0;
+  --danger: #f14c4c;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html { background: var(--bg); }
+body {
+  margin: 0;
+  font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+}
+.wrap { max-width: 720px; margin: 0 auto; padding: 32px 20px 56px; }
+h1 { margin: 0 0 4px; font-size: 1.7rem; letter-spacing: -0.01em; }
+.privacy { margin: 0 0 20px; color: var(--muted); }
+
+.status-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 14px; margin-bottom: 20px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+}
+.status-row.error { border-color: var(--danger); color: var(--danger); }
+#status { font-variant-numeric: tabular-nums; }
+.spinner {
+  flex: none; width: 15px; height: 15px; border-radius: 50%;
+  border: 2px solid var(--line); border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+.spinner[hidden] { display: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 20px 22px; margin-bottom: 20px;
+}
+.card.locked { opacity: 0.65; }
+h2 { margin: 0 0 12px; font-size: 1.15rem; }
+label { display: block; font-weight: 600; font-size: 0.9rem; margin-bottom: 6px; }
+
+input[type="password"], input[type="text"], textarea {
+  width: 100%; padding: 9px 11px;
+  border: 1px solid var(--line); border-radius: 8px; font: inherit; color: inherit; background: #111;
+}
+textarea { resize: vertical; font-family: var(--mono); font-size: 0.9rem; }
+input:focus-visible, textarea:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+button {
+  font: inherit; padding: 8px 16px; border-radius: 8px; cursor: pointer;
+  border: 1px solid var(--line); background: #1a1a1a; color: var(--ink);
+}
+button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+button.primary {
+  background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600;
+}
+button.primary:hover:not(:disabled) { background: #3fd0b2; color: #111; }
+.row { display: flex; gap: 8px; }
+.row input { flex: 1; }
+
+.result { min-height: 1.5em; margin: 12px 0 0; font-weight: 600; }
+.result.breached { color: var(--danger); }
+.result.notfound { color: var(--accent); }
+.note { margin: 12px 0 0; color: var(--danger); font-weight: 600; }
+.note[hidden] { display: none; }
+
+.notice {
+  margin: 12px 0 0; color: #ffd479; background: #241d0e;
+  border: 1px solid #4d3f1a; border-radius: 8px; padding: 8px 12px;
+}
+.notice[hidden] { display: none; }
+
+#user-progress { margin: 12px 0 0; color: var(--muted); min-height: 1.4em; font-variant-numeric: tabular-nums; }
+
+table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 0.9rem; }
+caption { caption-side: top; text-align: left; color: var(--muted); padding-bottom: 8px; font-size: 0.85rem; }
+th, td { border: 1px solid var(--line); padding: 7px 10px; text-align: left; vertical-align: top; }
+th { background: #222222; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.04em; }
+td.hash { font-family: var(--mono); font-size: 0.78rem; word-break: break-all; white-space: pre-line; }
+td.status-found { color: var(--accent); font-weight: 600; white-space: nowrap; }
+td.status-miss { color: var(--muted); white-space: nowrap; }
+td.breached-text { color: var(--danger); font-weight: 600; white-space: nowrap; }
+td.notfound-text { color: var(--accent); white-space: nowrap; }
+
+#user-summary { margin: 14px 0 0; font-weight: 600; }
+.actions { display: flex; gap: 10px; margin-top: 14px; }
+footer { color: var(--muted); font-size: 0.88rem; margin-top: 8px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>HS Breach Checker (fully offline)</h1>
+    <p class="privacy">All checks run in your browser. Your input is never sent to any server.</p>
+  </header>
+
+  <div class="status-row" aria-live="polite">
+    <span id="spinner" class="spinner" aria-hidden="true"></span>
+    <span id="status">Downloading data…</span>
+  </div>
+
+  <main>
+    <section class="card" id="user-card" aria-labelledby="user-heading">
+      <h2 id="user-heading">Username search</h2>
+      <form id="user-form">
+        <label for="user-input">Usernames</label>
+        <textarea id="user-input" rows="6" placeholder="one username or username:password per line (max 10,000)" disabled></textarea>
+        <div class="actions">
+          <button type="submit" class="primary" id="user-search" disabled>Search</button>
+        </div>
+      </form>
+      <p class="notice" id="user-cap" hidden>Only the first 10,000 unique lines were searched.</p>
+      <p id="user-progress" aria-live="polite"></p>
+      <div id="user-results" hidden>
+        <table id="results-table">
+          <caption>Username search results</caption>
+          <thead>
+            <tr>
+              <th scope="col">Username</th>
+              <th scope="col">Status</th>
+              <th scope="col">Password check</th>
+              <th scope="col">Password hash(es)</th>
+            </tr>
+          </thead>
+          <tbody id="results-body"></tbody>
+        </table>
+        <p id="user-summary" aria-live="polite"></p>
+        <div class="actions">
+          <button type="button" id="copy-btn" disabled>Copy results</button>
+          <button type="button" id="csv-btn" disabled>Download CSV</button>
+        </div>
+      </div>
+    </section>
+    <section class="card" id="pw-card" aria-labelledby="pw-heading">
+      <h2 id="pw-heading">Password check</h2>
+      <form id="pw-form">
+        <label for="pw-input">Password</label>
+        <div class="row">
+          <input type="password" id="pw-input" autocomplete="off" disabled>
+          <button type="button" id="pw-toggle" disabled>Show</button>
+          <button type="submit" class="primary" id="pw-check" disabled>Check</button>
+        </div>
+      </form>
+      <p class="note" id="pw-note" hidden>Password check requires HTTPS — open this page over a secure connection.</p>
+      <p class="result" id="pw-result" aria-live="polite"></p>
+    </section>
+
+  </main>
+  <footer>Data files are downloaded from the CDN once and cached by your browser. Made by Larina</footer>
+</div>
+
+<script type="module">
+import { parseAccounts, parsePwIndex, searchUsername, searchHash, toHex } from "./core.js";
+
+const DATA_URLS = {
+  "accounts.bin.gz": "https://litter.catbox.moe/zj0c8q3q3btl01dq.gz",
+  "pw-index.bin.gz": "https://litter.catbox.moe/rn92k0u89rdvjvru.gz",
+};
+const MAX_USERNAMES = 10000;
+const CHUNK_SIZE = 500;        // bulk processing batch size per setTimeout(0)
+const CHUNK_THRESHOLD = 1000;  // above this many usernames, yield to the UI between chunks
+
+const $ = (id) => document.getElementById(id);
+const els = {
+  spinner: $("spinner"),
+  status: $("status"),
+  pwCard: $("pw-card"),
+  pwForm: $("pw-form"),
+  pwInput: $("pw-input"),
+  pwToggle: $("pw-toggle"),
+  pwCheck: $("pw-check"),
+  pwNote: $("pw-note"),
+  pwResult: $("pw-result"),
+  userForm: $("user-form"),
+  userInput: $("user-input"),
+  userSearch: $("user-search"),
+  userCap: $("user-cap"),
+  userProgress: $("user-progress"),
+  userResults: $("user-results"),
+  resultsBody: $("results-body"),
+  userSummary: $("user-summary"),
+  copyBtn: $("copy-btn"),
+  csvBtn: $("csv-btn"),
+};
+
+const encoder = new TextEncoder();
+const state = { ready: false, accounts: null, pwIndex: null, results: null, searching: false };
+
+function setStatus(text, { busy = false, error = false } = {}) {
+  els.status.textContent = text;
+  els.spinner.hidden = !busy;
+  els.status.parentElement.classList.toggle("error", error);
+}
+
+function fail(text) {
+  setStatus(text, { error: true });
+}
+
+// --- Load pipeline ---------------------------------------------------------
+
+const mb = (bytes) => (bytes / 1e6).toFixed(1) + " MB";
+
+const dlState = [
+  { name: "accounts.bin.gz", recv: 0, total: 0 },
+  { name: "pw-index.bin.gz", recv: 0, total: 0 },
+];
+
+function renderProgress() {
+  const recv = dlState[0].recv + dlState[1].recv;
+  if (dlState.every((f) => f.total > 0)) {
+    const total = dlState[0].total + dlState[1].total;
+    setStatus(`Downloading data… ${mb(recv)} / ${mb(total)}`, { busy: true });
+  } else {
+    setStatus(`Downloading… ${mb(recv)} (size unknown)`, { busy: true });
+  }
+}
+
+async function downloadFile(slot) {
+  const res = await fetch(DATA_URLS[slot.name]);
+  if (!res.ok) throw new Error(`${slot.name}: HTTP ${res.status}`);
+  slot.total = Number(res.headers.get("Content-Length")) || 0;
+  const reader = res.body.getReader();
+  const chunks = [];
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    slot.recv += value.length;
+    renderProgress();
+  }
+  return chunks;
+}
+
+async function gunzip(chunks) {
+  const stream = new Blob(chunks).stream().pipeThrough(new DecompressionStream("gzip"));
+  return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+function loadedFromCache() {
+  const entries = performance
+    .getEntriesByType("resource")
+    .filter((e) => {
+      // Resource Timing zeroes transferSize for cross-origin requests without
+      // Timing-Allow-Origin, so the "cached" badge is only meaningful same-origin.
+      try {
+        if (new URL(e.name, location.href).origin !== location.origin) return false;
+      } catch {
+        return false;
+      }
+      return e.name.endsWith("/accounts.bin.gz") || e.name.endsWith("/pw-index.bin.gz");
+    });
+  return entries.length > 0 && entries.every((e) => e.transferSize === 0);
+}
+
+async function load() {
+  const t0 = performance.now();
+  if (typeof DecompressionStream === "undefined") {
+    fail("This browser can't decompress the data files. Please use a current browser (Chrome, Edge, Firefox, or Safari 16.4+).");
+    return;
+  }
+  setStatus("Downloading data…", { busy: true });
+
+  let accountChunks, pwChunks;
+  try {
+    [accountChunks, pwChunks] = await Promise.all([downloadFile(dlState[0]), downloadFile(dlState[1])]);
+  } catch {
+    fail("download failed — check the URL / connection");
+    return;
+  }
+
+  setStatus("Decompressing data…", { busy: true });
+  let accounts, pwIndex;
+  try {
+    const [accountsBuf, pwBuf] = await Promise.all([gunzip(accountChunks), gunzip(pwChunks)]);
+    accounts = parseAccounts(accountsBuf);
+    pwIndex = parsePwIndex(accounts, pwBuf);
+  } catch {
+    fail("Data file invalid — please re-upload the data files.");
+    return;
+  }
+
+  state.accounts = accounts;
+  state.pwIndex = pwIndex;
+  state.ready = true;
+
+  const secs = ((performance.now() - t0) / 1000).toFixed(1);
+  setStatus(
+    `Ready — ${accounts.entryCount.toLocaleString("en-US")} accounts loaded in ${secs}s` +
+      (loadedFromCache() ? " (cached)" : "")
+  );
+  els.userInput.disabled = false;
+  els.userSearch.disabled = false;
+  updatePwCard();
+}
+
+// --- Password check --------------------------------------------------------
+
+function updatePwCard() {
+  const insecure = !window.isSecureContext;
+  const disabled = insecure || !state.ready;
+  els.pwInput.disabled = disabled;
+  els.pwToggle.disabled = disabled;
+  els.pwCheck.disabled = disabled;
+  els.pwNote.hidden = !insecure;
+  els.pwCard.classList.toggle("locked", insecure);
+}
+
+els.pwToggle.addEventListener("click", () => {
+  const show = els.pwInput.type === "password";
+  els.pwInput.type = show ? "text" : "password";
+  els.pwToggle.textContent = show ? "Hide" : "Show";
+});
+
+els.pwInput.addEventListener("input", () => {
+  els.pwResult.textContent = "";
+  els.pwResult.className = "result";
+});
+
+els.pwForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const password = els.pwInput.value;
+  if (!password) return;
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(password + "LarinaProtect"));
+  const breached = searchHash(state.accounts, state.pwIndex, new Uint8Array(digest));
+  els.pwResult.className = "result " + (breached ? "breached" : "notfound");
+  els.pwResult.textContent = breached
+    ? "Breached — this password appears in the dataset."
+    : "Not found.";
+});
+
+// --- Username search -------------------------------------------------------
+function parseLines(text) {
+  const seen = new Set();
+  const entries = [];
+  let duplicates = 0;
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    // QoL: accept "username:password" lines — split on the first colon only
+    const colon = trimmed.indexOf(":");
+    const username = colon === -1 ? trimmed : trimmed.slice(0, colon);
+    const password = colon === -1 ? "" : trimmed.slice(colon + 1);
+    if (!username) continue;
+    if (seen.has(trimmed)) {
+      duplicates++;
+      continue;
+    }
+    seen.add(trimmed);
+    entries.push({ username, password });
+  }
+  return { entries, duplicates };
+}
+
+async function lookup(entry) {
+  const hits = searchUsername(state.accounts, encoder.encode(entry.username));
+  const result = { username: entry.username, found: hits.length > 0, hashes: hits.map((h) => toHex(h.hashBytes)) };
+  if (entry.password) {
+    const digest = await crypto.subtle.digest("SHA-256", encoder.encode(entry.password + "LarinaProtect"));
+    result.pwBreached = searchHash(state.accounts, state.pwIndex, new Uint8Array(digest));
+  }
+  return result;
+}
+
+els.userForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  if (!state.ready || state.searching) return;
+  runSearch();
+});
+
+function runSearch() {
+  const { entries, duplicates } = parseLines(els.userInput.value);
+  if (entries.length === 0) return; // empty input: no-op, keep previous results untouched
+  const capped = entries.length > MAX_USERNAMES;
+  const list = capped ? entries.slice(0, MAX_USERNAMES) : entries;
+
+  els.userCap.hidden = !capped;
+  els.userProgress.textContent = "";
+  els.userResults.hidden = true;
+  els.resultsBody.replaceChildren();
+  els.copyBtn.disabled = true;
+  els.csvBtn.disabled = true;
+  state.results = null;
+  state.searching = true;
+  els.userSearch.disabled = true;
+
+  const results = [];
+  let i = 0;
+  const finish = () => {
+    state.searching = false;
+    els.userSearch.disabled = false;
+    els.userProgress.textContent = "";
+    renderResults(results, duplicates);
+  };
+
+  if (list.length <= CHUNK_THRESHOLD) {
+    (async () => {
+      for (const entry of list) results.push(await lookup(entry));
+      finish();
+    })();
+  } else {
+    els.userProgress.textContent = `searching… 0/${list.length}`;
+    const step = async () => {
+      const end = Math.min(i + CHUNK_SIZE, list.length);
+      for (; i < end; i++) results.push(await lookup(list[i]));
+      els.userProgress.textContent = `searching… ${i}/${list.length}`;
+      if (i < list.length) setTimeout(step, 0);
+      else finish();
+    };
+    setTimeout(step, 0);
+  }
+}
+
+function renderResults(results, duplicates) {
+  const found = results.filter((r) => r.found).length;
+  const frag = document.createDocumentFragment();
+  for (const r of results) {
+    const tr = document.createElement("tr");
+    const tdName = document.createElement("td");
+    tdName.textContent = r.username;
+    const tdStatus = document.createElement("td");
+    tdStatus.textContent = r.found ? "found" : "not found";
+    tdStatus.className = r.found ? "status-found" : "status-miss";
+    const tdPw = document.createElement("td");
+    if (r.pwBreached === undefined) {
+      tdPw.textContent = "—";
+    } else {
+      tdPw.textContent = r.pwBreached ? "Breached" : "Not found";
+      tdPw.className = r.pwBreached ? "breached-text" : "notfound-text";
+    }
+    const tdHash = document.createElement("td");
+    tdHash.className = "hash";
+    tdHash.textContent = r.hashes.length ? r.hashes.join("\n") : "—";
+    tr.append(tdName, tdStatus, tdPw, tdHash);
+    frag.append(tr);
+  }
+  els.resultsBody.replaceChildren(frag);
+  els.userSummary.textContent =
+    `${found} found, ${results.length - found} not found (${duplicates} duplicates merged)`;
+  els.userResults.hidden = false;
+  const hasRows = results.length > 0;
+  els.copyBtn.disabled = !hasRows;
+  els.csvBtn.disabled = !hasRows;
+  state.results = results;
+}
+
+const statusText = (r) => (r.found ? "found" : "not found");
+const pwText = (r) => (r.pwBreached === undefined ? "" : r.pwBreached ? "breached" : "not found");
+
+const flashTimers = new WeakMap();
+
+function flashButton(btn, text) {
+  const pending = flashTimers.get(btn);
+  if (pending) clearTimeout(pending.id);
+  else flashTimers.set(btn, { label: btn.textContent, id: null });
+  const entry = flashTimers.get(btn);
+  btn.textContent = text;
+  entry.id = setTimeout(() => {
+    btn.textContent = entry.label;
+    flashTimers.delete(btn);
+  }, 1200);
+}
+
+function legacyCopy(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.setAttribute("readonly", "");
+  ta.style.position = "fixed";
+  ta.style.opacity = "0";
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try {
+    ok = document.execCommand("copy");
+  } catch {
+    ok = false;
+  }
+  ta.remove();
+  return ok;
+}
+
+els.copyBtn.addEventListener("click", async () => {
+  if (!state.results) return;
+  const tsv = state.results
+    // strip internal tabs so usernames can't shift TSV columns
+    .map((r) => [r.username.replaceAll("\t", " "), statusText(r), pwText(r), r.hashes.join("; ")].join("\t"))
+    .join("\n");
+  let copied = false;
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(tsv);
+      copied = true;
+    }
+  } catch {
+    copied = false;
+  }
+  if (!copied) copied = legacyCopy(tsv);
+  flashButton(els.copyBtn, copied ? "Copied" : "Copy failed");
+});
+function csvField(value) {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
+
+els.csvBtn.addEventListener("click", () => {
+  if (!state.results) return;
+  const lines = ["username,status,password_check,password_hash"];
+  for (const r of state.results) {
+    lines.push([r.username, statusText(r), pwText(r), r.hashes.join("; ")].map(csvField).join(","));
+  }
+  const blob = new Blob([lines.join("\r\n") + "\r\n"], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "breach-checker-results.csv";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+
+// --- Boot ------------------------------------------------------------------
+
+document.addEventListener("DOMContentLoaded", () => {
+  updatePwCard(); // shows the HTTPS notice immediately on insecure origins
+  load();
+});
+</script>
+</body>
+</html>
