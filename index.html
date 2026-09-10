@@ -249,6 +249,7 @@ async function gunzip(chunks) {
 }
 
 function loadedFromCache() {
+  const urls = new Set(Object.values(DATA_URLS));
   const entries = performance
     .getEntriesByType("resource")
     .filter((e) => {
@@ -259,7 +260,7 @@ function loadedFromCache() {
       } catch {
         return false;
       }
-      return e.name.endsWith("/accounts.bin.gz") || e.name.endsWith("/pw-index.bin.gz");
+      return urls.has(e.name);
     });
   return entries.length > 0 && entries.every((e) => e.transferSize === 0);
 }
