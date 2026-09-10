@@ -227,6 +227,27 @@ function renderProgress() {
   }
 }
 
+const CACHE_NAME = "hs-breach-data";
+
+// Returns { chunks, fromCache } — Cache Storage first, network fallback.
+async function loadData(slot) {
+  const url = DATA_URLS[slot.name];
+  if (typeof caches !== "undefined") {
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      const cached = await cache.match(url);
+      if (cached && cached.ok) {
+        slot.total = slot.recv = Number(cached.headers.get("Content-Length")) || 0;
+        const buf = await cached.arrayBuffer();
+        return { chunks: [new Uint8Array(buf)], fromCache: true };
+      }
+    } catch {
+      // Cache Storage unavailable mid-read — fall through to network
+    }
+  }
+  return { chunks: await downloadFile(slot), fromCache: false };
+}
+
 async function downloadFile(slot) {
   const res = await fetch(DATA_URLS[slot.name]);
   if (!res.ok) throw new Error(`${slot.name}: HTTP ${res.status}`);
@@ -240,6 +261,15 @@ async function downloadFile(slot) {
     slot.recv += value.length;
     renderProgress();
   }
+  // Store for future visits (best-effort; catbox CORS allows this response).
+  if (typeof caches !== "undefined") {
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      await cache.put(DATA_URLS[slot.name], new Response(new Blob(chunks)));
+    } catch {
+      // caching is an optimization — never block on it
+    }
+  }
   return chunks;
 }
 
@@ -248,21 +278,19 @@ async function gunzip(chunks) {
   return new Uint8Array(await new Response(stream).arrayBuffer());
 }
 
-function loadedFromCache() {
-  const urls = new Set(Object.values(DATA_URLS));
-  const entries = performance
-    .getEntriesByType("resource")
-    .filter((e) => {
-      // Resource Timing zeroes transferSize for cross-origin requests without
-      // Timing-Allow-Origin, so the "cached" badge is only meaningful same-origin.
-      try {
-        if (new URL(e.name, location.href).origin !== location.origin) return false;
-      } catch {
-        return false;
-      }
-      return urls.has(e.name);
-    });
-  return entries.length > 0 && entries.every((e) => e.transferSize === 0);
+// Drop cached entries for URLs no longer referenced by DATA_URLS — keeps the
+// ~100MB storage footprint to exactly the current dataset when URLs change.
+async function pruneStaleCache() {
+  if (typeof caches === "undefined") return;
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    const wanted = new Set(Object.values(DATA_URLS));
+    for (const req of await cache.keys()) {
+      if (!wanted.has(req.url)) await cache.delete(req);
+    }
+  } catch {
+    // never block load on cache maintenance
+  }
 }
 
 async function load() {
@@ -271,35 +299,68 @@ async function load() {
     fail("This browser can't decompress the data files. Please use a current browser (Chrome, Edge, Firefox, or Safari 16.4+).");
     return;
   }
-  setStatus("Downloading data…", { busy: true });
 
-  let accountChunks, pwChunks;
-  try {
-    [accountChunks, pwChunks] = await Promise.all([downloadFile(dlState[0]), downloadFile(dlState[1])]);
-  } catch {
+  const [accountsData, pwData] = await Promise.all([
+    loadData(dlState[0]).catch(() => null),
+    loadData(dlState[1]).catch(() => null),
+  ]);
+  if (!accountsData || !pwData) {
     fail("download failed — check the URL / connection");
     return;
   }
 
-  setStatus("Decompressing data…", { busy: true });
+  let fromCache = accountsData.fromCache && pwData.fromCache;
+  setStatus(fromCache ? "Loading cached data…" : "Decompressing data…", { busy: true });
+
   let accounts, pwIndex;
-  try {
-    const [accountsBuf, pwBuf] = await Promise.all([gunzip(accountChunks), gunzip(pwChunks)]);
+  let accountsChunks = accountsData.chunks;
+  let pwChunks = pwData.chunks;
+  const parse = async () => {
+    const [accountsBuf, pwBuf] = await Promise.all([
+      gunzip(accountsChunks),
+      gunzip(pwChunks),
+    ]);
     accounts = parseAccounts(accountsBuf);
     pwIndex = parsePwIndex(accounts, pwBuf);
+  };
+
+  try {
+    await parse();
   } catch {
-    fail("Data file invalid — please re-upload the data files.");
-    return;
+    if (!fromCache) {
+      fail("Data file invalid — please re-upload the data files.");
+      return;
+    }
+    // Self-heal: cached copy is corrupt — purge it and refetch from the network once.
+    setStatus("Cached data invalid — re-downloading…", { busy: true });
+    try {
+      if (typeof caches !== "undefined") {
+        const cache = await caches.open(CACHE_NAME);
+        await Promise.all(Object.values(DATA_URLS).map((u) => cache.delete(u)));
+      }
+      const [freshAccounts, freshPw] = await Promise.all([
+        downloadFile(dlState[0]),
+        downloadFile(dlState[1]),
+      ]);
+      accountsChunks = freshAccounts;
+      pwChunks = freshPw;
+      await parse();
+      fromCache = false; // data now comes from the network, not the cache
+    } catch {
+      fail("download failed — check the URL / connection");
+      return;
+    }
   }
 
   state.accounts = accounts;
   state.pwIndex = pwIndex;
   state.ready = true;
+  pruneStaleCache(); // fire-and-forget: drop entries for old URLs
 
   const secs = ((performance.now() - t0) / 1000).toFixed(1);
   setStatus(
     `Ready — ${accounts.entryCount.toLocaleString("en-US")} accounts loaded in ${secs}s` +
-      (loadedFromCache() ? " (cached)" : "")
+      (fromCache ? " (cached)" : "")
   );
   els.userInput.disabled = false;
   els.userSearch.disabled = false;
